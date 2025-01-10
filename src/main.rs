@@ -1,6 +1,9 @@
 use actix_web::{get, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 
+mod handlers;
+mod models;
 mod db;
+mod schema;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

@@ -8,7 +8,7 @@ actix-rt = "2.10.0"
 actix-web = "4.9.0"
 bcrypt = "0.16.0"
 chrono = { version = "0.4.39", features = ["serde"] }
-diesel = "2.2.6"
+diesel = { version = "2.2.6", features = ["r2d2", "postgres", "chrono"]}
 diesel_migrations = { version = "2.2.0", features = ["postgres"] }
 dotenvy = "0.15.7"
 postgres = "0.19.9"
