@@ -26,5 +26,5 @@ pub struct NewsWithCategories {
     pub id: i32,
     pub title: String,
     pub content: String,
-    pub categories: Vec<String>
+    pub categories: Vec<String>,
 }
