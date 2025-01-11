@@ -1,11 +1,13 @@
 use crate::models::news::News;
 use crate::schema::categories::{self, dsl::*};
+use crate::schema::news;
 use crate::schema::news::dsl::*;
-use crate::schema::news_categories::dsl::news_categories;
+use crate::schema::news_categories;
 use crate::{db::DBPool, models::category::Category, models::news::NewsCategory};
 use actix_web::{web, HttpResponse};
 use diesel::prelude::*;
 use serde::Deserialize;
+use serde_json::json;
 
 #[derive(Deserialize)]
 pub struct NewsWithCategories {
@@ -19,44 +21,61 @@ pub async fn create_news(
     pool: web::Data<DBPool>,
     news_data: web::Json<NewsWithCategories>,
 ) -> HttpResponse {
-    let mut conn = pool.get().expect("Failed to get DB connection.");
+    let mut conn = match pool.get() {
+        Ok(conn) => conn,
+        Err(_) => return HttpResponse::InternalServerError().body("Failed to get DB connection."),
+    };
 
-    // Start a transaction
+    // Perform the transaction
     let transaction_result = conn.transaction::<_, diesel::result::Error, _>(|conn| {
-        // Insert into `news`
-        let new_news = News {
-            id: 0, // Will auto-increment
-            title: news_data.title.clone(),
-            content: news_data.content.clone(),
-            author_id: news_data.author_id,
-            created_at: chrono::Utc::now().naive_utc(),
-            updated_at: chrono::Utc::now().naive_utc(),
-        };
+        // Insert the news item
+        let new_news = diesel::insert_into(news::table)
+            .values((
+                news::title.eq(&news_data.title),
+                news::content.eq(&news_data.content),
+                news::author_id.eq(news_data.author_id),
+                news::created_at.eq(chrono::Utc::now().naive_utc()),
+                news::updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .get_result::<News>(conn)?;
 
-        let news_item = diesel::insert_into(news)
-            .values(&new_news)
-            .get_result::<News>(conn)?; // Use `conn` passed to the closure
-
-        // Insert into `news_categories`
+        // Prepare category associations
         let category_entries: Vec<NewsCategory> = news_data
             .category_ids
             .iter()
             .map(|&category_id| NewsCategory {
-                news_id: news_item.id,
+                news_id: new_news.id,
                 category_id,
             })
             .collect();
 
-        diesel::insert_into(news_categories)
+        // Insert into `news_categories`
+        diesel::insert_into(news_categories::table)
             .values(&category_entries)
-            .execute(conn)?; // Use `conn` passed to the closure
+            .execute(conn)?;
 
-        Ok(news_item)
+        Ok(new_news)
     });
 
+    // Return the response based on the transaction result
     match transaction_result {
-        Ok(news_item) => HttpResponse::Created().json(news_item),
-        Err(e) => HttpResponse::InternalServerError().body(format!("Error creating news: {}", e)),
+        Ok(news_item) => {
+            // Optionally include category information in the response
+            let response = json!({
+                "id": news_item.id,
+                "title": news_item.title,
+                "content": news_item.content,
+                "author_id": news_item.author_id,
+                "created_at": news_item.created_at,
+                "updated_at": news_item.updated_at,
+                "categories": news_data.category_ids, // Return the categories for clarity
+            });
+            HttpResponse::Created().json(response)
+        }
+        Err(e) => {
+            eprintln!("Error creating news: {:?}", e); // Log the error for debugging
+            HttpResponse::InternalServerError().body("Failed to create news.")
+        }
     }
 }
 
