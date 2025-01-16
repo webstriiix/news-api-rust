@@ -1,109 +1,90 @@
-use actix_web::{web, HttpResponse, Result};
+// src/handlers/auth.rs
+use actix_web::{web, Error, HttpResponse};
 use bcrypt::{hash, verify, DEFAULT_COST};
-use diesel::dsl::exists;
 use diesel::prelude::*;
-use diesel::query_dsl::methods::FilterDsl;
-use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 
 use crate::db::DBPool;
-use crate::models::user::{self, NewUser, User};
-use crate::schema::users::{self, dsl::*};
+use crate::models::user::{NewUser, User};
+use crate::schema::users::dsl::*;
+use crate::utils::jwt::create_token;
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct LoginCredentials {
-    username: String,
-    password: String,
+    pub username: String,
+    pub password: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct LoginResponse {
     token: String,
     is_admin: bool,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: i32,
-    pub username: String,
-    pub is_admin: bool,
-    pub exp: usize,
-}
-
-// Login logic
 pub async fn login(
     credentials: web::Json<LoginCredentials>,
     pool: web::Data<DBPool>,
-) -> Result<HttpResponse> {
-    // get database connection
-    let conn = &mut pool.get().unwrap();
+) -> Result<HttpResponse, Error> {
+    let conn = &mut pool.get().map_err(|e| {
+        actix_web::error::ErrorInternalServerError(format!("Database error: {}", e))
+    })?;
 
-    // Find User by username
+    // Find user by username
     let user_result = users
         .filter(username.eq(&credentials.username))
-        .first::<User>(conn);
+        .first::<User>(conn)
+        .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid credentials"))?;
 
-    // login logic
-    match user_result {
-        Ok(user) => {
-            // verify password
-            if verify(&credentials.password, &user.password).unwrap() {
-                // create JWT Token
-                let claims = Claims {
-                    sub: user.id,
-                    username: user.username,
-                    is_admin: user.is_admin,
-                    exp: (chrono::Utc::now() + chrono::Duration::hours(24)).timestamp() as usize,
-                };
+    // Verify password
+    if verify(&credentials.password, &user_result.password)
+        .map_err(|_| actix_web::error::ErrorInternalServerError("Password verification failed"))?
+    {
+        let token = create_token(user_result.id, &user_result.username, user_result.is_admin)
+            .map_err(|_| actix_web::error::ErrorInternalServerError("Token creation failed"))?;
 
-                let token = encode(
-                    &Header::default(),
-                    &claims,
-                    &EncodingKey::from_secret(std::env::var("JWT_TOKEN").unwrap().as_bytes()),
-                )
-                .unwrap();
-
-                Ok(HttpResponse::Ok().json(LoginResponse {
-                    token,
-                    is_admin: user.is_admin,
-                }))
-            } else {
-                Ok(HttpResponse::Unauthorized().json("Invalid credentials"))
-            }
-        }
-        Err(_) => Ok(HttpResponse::Unauthorized().json("Invalid credentials")),
+        Ok(HttpResponse::Ok().json(LoginResponse {
+            token,
+            is_admin: user_result.is_admin,
+        }))
+    } else {
+        Err(actix_web::error::ErrorUnauthorized("Invalid credentials"))
     }
 }
 
-// Register
-pub async fn register (new_user: web::Json<LoginCredentials>, pool: web::Data<DBPool>) -> Result<HttpResponse>{
-    // connect to database
-    let conn = &mut pool.get().unwrap();
+pub async fn register(
+    user_data: web::Json<LoginCredentials>,
+    pool: web::Data<DBPool>,
+) -> Result<HttpResponse, Error> {
+    let conn = &mut pool.get().map_err(|e| {
+        actix_web::error::ErrorInternalServerError(format!("Database error: {}", e))
+    })?;
 
-    // check if username already exist
-    let exists = users
-        .filter(username.eq(&new_user.username))
+    // Check if username exists
+    let user_exists = users
+        .filter(username.eq(&user_data.username))
         .first::<User>(conn)
         .is_ok();
 
-    if exists {
-        return Ok(HttpResponse::BadRequest().json("Username already exist!"));
+    if user_exists {
+        return Err(actix_web::error::ErrorBadRequest("Username already exists"));
     }
 
-    // hash password
-    let password_hash = hash(&new_user, DEFAULT_COST).unwrap();
+    // Hash password
+    let password_hash = hash(&user_data.password, DEFAULT_COST)
+        .map_err(|_| actix_web::error::ErrorInternalServerError("Password hashing failed"))?;
 
-    let user_struct = NewUser {
-        username: new_user.username.clone(),
+    // Create new user
+    let new_user = NewUser {
+        username: user_data.username.clone(),
         password: password_hash,
-        is_admin: true,
+        is_admin: false,
     };
 
-    // insert new user
+    // Insert into database
     diesel::insert_into(users)
         .values(&new_user)
         .execute(conn)
-        .map_err(|_| HttpResponse::InternalServerError().json("Cannot create new user!"))?;
+        .map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create user"))?;
 
-    Ok(HttpResponse::Created().json("User created successfully!"))
+    Ok(HttpResponse::Created().json("User created successfully"))
 }
