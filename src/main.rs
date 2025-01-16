@@ -1,6 +1,7 @@
 use actix_web::{App, HttpServer, web};
 use dotenvy::dotenv;
 
+mod utils;
 mod db;
 mod handlers;
 mod models;
