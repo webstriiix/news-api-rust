@@ -1,13 +1,16 @@
+use std::error::Error;
+
 use crate::models::news::News;
-use crate::schema::categories::{self, dsl::*};
-use crate::schema::news;
+use crate::schema::categories::dsl::*;
 use crate::schema::news::dsl::*;
+use crate::schema::news::{self, updated_at};
 use crate::schema::news_categories;
 use crate::{db::DBPool, models::category::Category, models::news::NewsCategory};
 use actix_web::{web, HttpResponse};
-use diesel::prelude::*;
-use serde::Deserialize;
+use diesel::{prelude::*, result};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use validator::Validate;
 
 #[derive(Deserialize)]
 pub struct NewsWithCategories {
@@ -105,4 +108,118 @@ pub async fn create_category(
             HttpResponse::InternalServerError().body(format!("Error saving new category: {}", e))
         }
     }
+}
+
+// struct for news update object
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateNewsRequest {
+    #[validate(length(
+        min = 1,
+        max = 100,
+        message = "title must be between 1 and 100 characters"
+    ))]
+    pub news_title: Option<String>,
+
+    #[validate(length(min = 1, message = "content cannot empty"))]
+    pub news_content: Option<String>,
+    pub category_ids: Option<Vec<i32>>,
+}
+
+#[derive(AsChangeset)]
+#[table_name = "news"]
+struct NewsChangeset<'a> {
+    title: Option<&'a str>,
+    content: Option<&'a str>,
+    updated_at: chrono::NaiveDateTime,
+}
+
+// update response object
+#[derive(Debug, Serialize)]
+pub struct UpdateNewsResponse {
+    pub message: String,
+    pub news: News,
+}
+
+// update news
+pub async fn update_news(
+    path: web::Path<i32>,
+    update_data: web::Json<UpdateNewsRequest>,
+    pool: web::Data<DBPool>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let news_id = path.into_inner();
+
+    // validate input if any fields is provided
+    if let Err(errors) = update_data.validate() {
+        return Ok(HttpResponse::BadRequest().json(errors));
+    }
+
+    let conn = &mut pool.get().map_err(|e| {
+        actix_web::error::ErrorInternalServerError(format!("Database error: {}", e))
+    })?;
+
+    // start updating
+    let result = conn.transaction(|conn| {
+        // Build update query dynamically based on provided fields
+        let news_exist = news.find(news_id).first::<News>(conn).optional()?;
+
+        if let Some(existing_news) = news_exist {
+            // Build update query dynamically based on provided fields
+            let changeset = NewsChangeset {
+                title: update_data.news_title.as_deref(),
+                content: update_data.news_content.as_deref(),
+                updated_at: chrono::Utc::now().naive_utc(),
+            };
+
+            // execute update
+            let updated_news: News = diesel::update(news.find(news_id))
+                .set(&changeset)
+                .get_result(conn)?;
+
+            // update categories if provided
+            if let Some(news_categories) = &update_data.category_ids {
+                update_news_categories(conn, news_id, news_categories)?;
+            }
+
+            Ok(updated_news)
+        } else {
+            Err(diesel::result::Error::NotFound)
+        }
+    });
+
+    match result {
+        Ok(updated_news) => Ok(HttpResponse::Ok().json(UpdateNewsResponse {
+            message: "News update successfully".to_string(),
+            news: updated_news,
+        })),
+        Err(diesel::result::Error::NotFound) => Ok(HttpResponse::NotFound().json("News not found")),
+        Err(e) => Err(actix_web::error::ErrorInternalServerError(e)),
+    }
+}
+
+// update the news category
+fn update_news_categories(
+    conn: &mut PgConnection,
+    news_ids: i32,
+    categoriy_ids: &[i32],
+) -> QueryResult<()> {
+    use crate::schema::news_categories::dsl::*;
+
+    // delete current categories
+    diesel::delete(news_categories.filter(news_id.eq(news_id))).execute(conn)?;
+
+    // get categories entries
+    let new_entries: Vec<NewsCategory> = categoriy_ids
+        .iter()
+        .map(|&cat_id| NewsCategory {
+            news_id: news_ids,
+            category_id: cat_id,
+        })
+        .collect();
+
+    // insert categories
+    diesel::insert_into(news_categories)
+        .values(&new_entries)
+        .execute(conn)?;
+
+    Ok(())
 }
