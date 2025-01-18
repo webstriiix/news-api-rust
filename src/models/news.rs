@@ -3,7 +3,7 @@ use crate::schema::news_categories;
 use diesel::prelude::{Insertable, Queryable};
 use serde::{Deserialize, Serialize};
 
-#[derive(Queryable, Serialize, Deserialize, Insertable)]
+#[derive(Queryable, Serialize, Deserialize, Insertable, Debug)]
 #[table_name = "news"]
 pub struct News {
     pub id: i32,
