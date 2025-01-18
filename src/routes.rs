@@ -1,6 +1,6 @@
 use actix_web::web;
 
-use crate::middleware::{admin::AdminMiddleware, auth::AuthMiddleWare};
+use crate::{handlers::admin::update_news, middleware::{admin::AdminMiddleware, auth::AuthMiddleWare}};
 
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // Admin routes
@@ -12,6 +12,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                 "/create-news",
                 web::post().to(crate::handlers::admin::create_news),
             )
+            .route("/news/{id}", web::put().to(update_news))
             .route(
                 "/list-news",
                 web::get().to(crate::handlers::news::list_news),
