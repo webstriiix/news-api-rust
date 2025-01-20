@@ -3,6 +3,8 @@ use crate::schema::news_categories;
 use diesel::prelude::{Insertable, Queryable};
 use serde::{Deserialize, Serialize};
 
+use crate::models::category::CategorySummary;
+
 #[derive(Queryable, Serialize, Deserialize, Insertable, Debug)]
 #[table_name = "news"]
 pub struct News {
@@ -22,9 +24,12 @@ pub struct NewsCategory {
 }
 
 #[derive(Queryable, Serialize, Deserialize)]
-pub struct NewsWithCategories {
-    pub id: i32,
-    pub title: String,
-    pub content: String,
-    pub categories: Vec<String>,
+pub struct NewsDetail {
+    id: i32,
+    title: String,
+    content: String,
+    author_id: i32,
+    created_at: chrono::NaiveDateTime,
+    updated_at: chrono::NaiveDateTime,
+    categories: Vec<CategorySummary>,
 }
