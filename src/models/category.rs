@@ -12,8 +12,8 @@ pub struct Category {
     pub updated_at: chrono::NaiveDateTime,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CategorySummary {
-    id: i32,
-    name: String,
+    pub id: i32,
+    pub name: String,
 }
