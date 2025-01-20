@@ -25,11 +25,11 @@ pub struct NewsCategory {
 
 #[derive(Queryable, Serialize, Deserialize)]
 pub struct NewsDetail {
-    id: i32,
-    title: String,
-    content: String,
-    author_id: i32,
-    created_at: chrono::NaiveDateTime,
-    updated_at: chrono::NaiveDateTime,
-    categories: Vec<CategorySummary>,
+    pub id: i32,
+    pub title: String,
+    pub content: String,
+    pub author_id: i32,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
+    pub categories: Vec<CategorySummary>,
 }
