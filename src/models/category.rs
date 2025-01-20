@@ -1,5 +1,5 @@
-use diesel::prelude::{Insertable, Queryable};
 use crate::schema::categories;
+use diesel::prelude::{Insertable, Queryable};
 use serde::{Deserialize, Serialize};
 
 #[derive(Queryable, Serialize, Deserialize, Insertable)]
@@ -10,4 +10,10 @@ pub struct Category {
     pub description: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
+}
+
+#[derive(Serialize)]
+pub struct CategorySummary {
+    id: i32,
+    name: String,
 }
