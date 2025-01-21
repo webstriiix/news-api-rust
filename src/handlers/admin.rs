@@ -1,13 +1,11 @@
-use std::error::Error;
-
 use crate::models::news::News;
-use crate::schema::categories::dsl::*;
+use crate::schema::categories::{self, dsl::*};
+use crate::schema::news;
 use crate::schema::news::dsl::*;
-use crate::schema::news::{self, updated_at};
 use crate::schema::news_categories;
 use crate::{db::DBPool, models::category::Category, models::news::NewsCategory};
 use actix_web::{web, HttpResponse};
-use diesel::{prelude::*, result};
+use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use validator::Validate;
@@ -222,4 +220,48 @@ fn update_news_categories(
         .execute(conn)?;
 
     Ok(())
+}
+
+// delete news
+pub async fn delete_news(pool: web::Data<DBPool>, news_id: web::Path<i32>) -> HttpResponse {
+    let mut conn = match pool.get() {
+        Ok(conn) => conn,
+        Err(_) => {
+            return HttpResponse::InternalServerError().body("Failed to connect to database!")
+        }
+    };
+
+    // deleting news
+    match diesel::delete(news::table.filter(news::id.eq(*news_id))).execute(&mut conn) {
+        Ok(affected_rows) => {
+            if affected_rows == 0 {
+                HttpResponse::NotFound().body("News not found!")
+            } else {
+                HttpResponse::Ok().body("News deleted successfully.")
+            }
+        }
+        Err(_) => HttpResponse::InternalServerError().body("Failed to delete news!"),
+    }
+}
+
+// delete category
+pub async fn delete_category(pool: web::Data<DBPool>, category_id: web::Path<i32>) -> HttpResponse {
+    let mut conn = match pool.get() {
+        Ok(conn) => conn,
+        Err(_) => {
+            return HttpResponse::InternalServerError().body("Failed to connect to database!")
+        }
+    };
+
+    // deleting category
+    match diesel::delete(categories::table.filter(categories::id.eq(*category_id))).execute(&mut conn) {
+        Ok(affected_rows) => {
+            if affected_rows == 0 {
+                HttpResponse::NotFound().body("Category not found!")
+            } else {
+                HttpResponse::Ok().body("Category deleted successfully.")
+            }
+        }
+        Err(_) => HttpResponse::InternalServerError().body("Failed to delete category!"),
+    }
 }
