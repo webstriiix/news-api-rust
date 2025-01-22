@@ -3,8 +3,10 @@ use crate::schema::categories::{self, dsl::*};
 use crate::schema::news;
 use crate::schema::news::dsl::*;
 use crate::schema::news_categories;
+use crate::utils::error_response::AppError;
+use crate::utils::jwt::Claims;
 use crate::{db::DBPool, models::category::Category, models::news::NewsCategory};
-use actix_web::{web, HttpResponse};
+use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,27 +20,31 @@ pub struct NewsWithCategories {
     pub category_ids: Vec<i32>,
 }
 
+/*
+        CREATE FUNCTION
+*/
+
 pub async fn create_news(
     pool: web::Data<DBPool>,
     news_data: web::Json<NewsWithCategories>,
-) -> HttpResponse {
-    let mut conn = match pool.get() {
-        Ok(conn) => conn,
-        Err(_) => return HttpResponse::InternalServerError().body("Failed to get DB connection."),
-    };
+) -> Result<HttpResponse, AppError> {
+    let mut conn = pool
+        .get()
+        .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
 
     // Perform the transaction
-    let transaction_result = conn.transaction::<_, diesel::result::Error, _>(|conn| {
+    let new_news = conn.transaction::<_, AppError, _>(|conn| {
         // Insert the news item
         let new_news = diesel::insert_into(news::table)
             .values((
                 news::title.eq(&news_data.title),
                 news::content.eq(&news_data.content),
                 news::author_id.eq(news_data.author_id),
-                news::created_at.eq(chrono::Utc::now().naive_utc()),
-                news::updated_at.eq(chrono::Utc::now().naive_utc()),
+                news::created_at.eq(Utc::now().naive_utc()),
+                news::updated_at.eq(Utc::now().naive_utc()),
             ))
-            .get_result::<News>(conn)?;
+            .get_result::<News>(conn)
+            .map_err(|e| AppError::DatabaseError(format!("Failed to insert news: {}", e)))?;
 
         // Prepare category associations
         let category_entries: Vec<NewsCategory> = news_data
@@ -53,60 +59,70 @@ pub async fn create_news(
         // Insert into `news_categories`
         diesel::insert_into(news_categories::table)
             .values(&category_entries)
-            .execute(conn)?;
+            .execute(conn)
+            .map_err(|e| AppError::DatabaseError(format!("Failed to insert categories: {}", e)))?;
 
         Ok(new_news)
+    })?;
+
+    // Create successful response
+    let response = json!({
+        "message": "News created successfully",
+        "news": {
+            "id": new_news.id,
+            "title": new_news.title,
+            "content": new_news.content,
+            "author_id": new_news.author_id,
+            "created_at": new_news.created_at,
+            "updated_at": new_news.updated_at,
+            "categories": news_data.category_ids
+        }
     });
 
-    // Return the response based on the transaction result
-    match transaction_result {
-        Ok(news_item) => {
-            // Optionally include category information in the response
-            let response = json!({
-                "id": news_item.id,
-                "title": news_item.title,
-                "content": news_item.content,
-                "author_id": news_item.author_id,
-                "created_at": news_item.created_at,
-                "updated_at": news_item.updated_at,
-                "categories": news_data.category_ids, // Return the categories for clarity
-            });
-            HttpResponse::Created().json(response)
-        }
-        Err(e) => {
-            eprintln!("Error creating news: {:?}", e); // Log the error for debugging
-            HttpResponse::InternalServerError().body("Failed to create news.")
-        }
-    }
+    Ok(HttpResponse::Created().json(response))
 }
 
+// create category
 pub async fn create_category(
     pool: web::Data<DBPool>,
     category_data: web::Json<Category>,
-) -> HttpResponse {
+) -> Result<HttpResponse, AppError> {
     // Get database connection
-    let mut conn = pool.get().expect("Failed to get DB connection.");
+    // Validate input
+    if let Err(errors) = category_data.validate() {
+        return Ok(HttpResponse::BadRequest().json(errors));
+    }
+
+    let mut conn = pool
+        .get()
+        .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
 
     // Construct the category item
     let new_category = Category {
-        id: 0,
+        id: 0, // This will be replaced by the database
         name: category_data.name.clone(),
         description: category_data.description.clone(),
-        created_at: chrono::Utc::now().naive_utc(),
-        updated_at: chrono::Utc::now().naive_utc(),
+        created_at: Utc::now().naive_utc(),
+        updated_at: Utc::now().naive_utc(),
     };
 
-    // perform diesel insertion
-    match diesel::insert_into(categories)
-        .values(&new_category)
-        .execute(&mut conn)
-    {
-        Ok(_) => HttpResponse::Created().json(new_category),
-        Err(e) => {
-            HttpResponse::InternalServerError().body(format!("Error saving new category: {}", e))
-        }
-    }
+    // Perform insertion within a transaction
+    let result = conn.transaction::<_, AppError, _>(|conn| {
+        diesel::insert_into(categories::table)
+            .values(&new_category)
+            .get_result::<Category>(conn)
+            .map_err(|e| AppError::DatabaseError(format!("Failed to create category: {}", e)))
+    })?;
+
+    Ok(HttpResponse::Created().json(json!({
+        "message": "Category created successfully",
+        "category": result
+    })))
 }
+
+/*
+        UPDATE FUNCTION
+*/
 
 // struct for news update object
 #[derive(Debug, Deserialize, Validate)]
@@ -138,63 +154,7 @@ pub struct UpdateNewsResponse {
     pub news: News,
 }
 
-// update news
-pub async fn update_news(
-    path: web::Path<i32>,
-    update_data: web::Json<UpdateNewsRequest>,
-    pool: web::Data<DBPool>,
-) -> Result<HttpResponse, actix_web::Error> {
-    let news_id = path.into_inner();
-
-    // validate input if any fields is provided
-    if let Err(errors) = update_data.validate() {
-        return Ok(HttpResponse::BadRequest().json(errors));
-    }
-
-    let conn = &mut pool.get().map_err(|e| {
-        actix_web::error::ErrorInternalServerError(format!("Database error: {}", e))
-    })?;
-
-    // start updating
-    let result = conn.transaction(|conn| {
-        // Build update query dynamically based on provided fields
-        let news_exist = news.find(news_id).first::<News>(conn).optional()?;
-
-        if let Some(existing_news) = news_exist {
-            // Build update query dynamically based on provided fields
-            let changeset = NewsChangeset {
-                title: update_data.news_title.as_deref(),
-                content: update_data.news_content.as_deref(),
-                updated_at: chrono::Utc::now().naive_utc(),
-            };
-
-            // execute update
-            let updated_news: News = diesel::update(news.find(news_id))
-                .set(&changeset)
-                .get_result(conn)?;
-
-            // update categories if provided
-            if let Some(news_categories) = &update_data.category_ids {
-                update_news_categories(conn, news_id, news_categories)?;
-            }
-
-            Ok(updated_news)
-        } else {
-            Err(diesel::result::Error::NotFound)
-        }
-    });
-
-    match result {
-        Ok(updated_news) => Ok(HttpResponse::Ok().json(UpdateNewsResponse {
-            message: "News update successfully".to_string(),
-            news: updated_news,
-        })),
-        Err(diesel::result::Error::NotFound) => Ok(HttpResponse::NotFound().json("News not found")),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(e)),
-    }
-}
-
-// update the news category
+// update the category in the news
 fn update_news_categories(
     conn: &mut PgConnection,
     news_ids: i32,
@@ -222,46 +182,187 @@ fn update_news_categories(
     Ok(())
 }
 
-// delete news
-pub async fn delete_news(pool: web::Data<DBPool>, news_id: web::Path<i32>) -> HttpResponse {
-    let mut conn = match pool.get() {
-        Ok(conn) => conn,
-        Err(_) => {
-            return HttpResponse::InternalServerError().body("Failed to connect to database!")
-        }
-    };
+// update news
+pub async fn update_news(
+    req: HttpRequest,
+    path: web::Path<i32>,
+    update_data: web::Json<UpdateNewsRequest>,
+    pool: web::Data<DBPool>,
+) -> Result<HttpResponse, AppError> {
+    let news_id = path.into_inner();
 
-    // deleting news
-    match diesel::delete(news::table.filter(news::id.eq(*news_id))).execute(&mut conn) {
-        Ok(affected_rows) => {
-            if affected_rows == 0 {
-                HttpResponse::NotFound().body("News not found!")
-            } else {
-                HttpResponse::Ok().body("News deleted successfully.")
-            }
-        }
-        Err(_) => HttpResponse::InternalServerError().body("Failed to delete news!"),
+    // extract user claims from JWT
+    let user_claims = req
+        .extensions()
+        .get::<Claims>()
+        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access".into()))?;
+
+    // validate input if any fields are provided
+    if let Err(errors) = update_data.validate() {
+        return Ok(HttpResponse::BadRequest().json(errors));
     }
+
+    let mut conn = pool
+        .get()
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    // start updating
+    let result = conn.transaction::<_, AppError, _>(|conn| {
+        // Build update query dynamically based on provided fields
+        let existing_news = news
+            .find(news_id)
+            .first::<News>(conn)
+            .optional()
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?
+            .ok_or_else(|| AppError::NotFoundError("News not found!".into()))?;
+
+        // check the user authority, only admin allowed
+        if !user_claims.is_admin && user_claims.sub != existing_news.author_id {
+            return Err(AppError::ForbiddenError("Not authorized!".into()));
+        }
+
+        // Build update query dynamically based on provided fields
+        let changeset = NewsChangeset {
+            title: update_data
+                .news_title
+                .as_deref()
+                .or(Some(&existing_news.title)),
+            content: update_data
+                .news_content
+                .as_deref()
+                .or(Some(&existing_news.content)),
+            updated_at: chrono::Utc::now().naive_utc(),
+        };
+
+        // execute update
+        let updated_news: News = diesel::update(news.find(news_id))
+            .set(&changeset)
+            .get_result(conn)
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        // update categories if provided
+        if let Some(news_categories) = &update_data.category_ids {
+            update_news_categories(conn, news_id, news_categories)
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        }
+
+        Ok(updated_news)
+    })?;
+
+    Ok(HttpResponse::Ok().json(UpdateNewsResponse {
+        message: "News updated successfully".to_string(),
+        news: result,
+    }))
 }
 
-// delete category
-pub async fn delete_category(pool: web::Data<DBPool>, category_id: web::Path<i32>) -> HttpResponse {
-    let mut conn = match pool.get() {
-        Ok(conn) => conn,
-        Err(_) => {
-            return HttpResponse::InternalServerError().body("Failed to connect to database!")
-        }
-    };
+/*
+        DELETE FUNCTION
+*/
 
-    // deleting category
-    match diesel::delete(categories::table.filter(categories::id.eq(*category_id))).execute(&mut conn) {
-        Ok(affected_rows) => {
-            if affected_rows == 0 {
-                HttpResponse::NotFound().body("Category not found!")
-            } else {
-                HttpResponse::Ok().body("Category deleted successfully.")
-            }
+pub async fn delete_news(
+    req: HttpRequest,
+    pool: web::Data<DBPool>,
+    news_id: web::Path<i32>,
+) -> Result<HttpResponse, AppError> {
+    // extract user claims from JWT
+    let user_claims = req
+        .extensions()
+        .get::<Claims>()
+        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access".into()))?;
+
+    let mut conn = pool
+        .get()
+        .map_err(|e| AppError::DatabaseError(format!("Database connection error: {}", e)))?;
+
+    // perform deletion within a transaction
+    let result = conn.transaction::<_, AppError, _>(|conn| {
+        // first check if news exists and user has permission
+        let news_item = news::table
+            .find(*news_id)
+            .first::<News>(conn)
+            .optional()
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?
+            .ok_or_else(|| AppError::NotFoundError("News not found".into()))?;
+
+        // check authorization
+        if !user_claims.is_admin && user_claims.sub != news_item.author_id {
+            return Err(AppError::ForbiddenError(
+                "Not authorized to delete this news".into(),
+            ));
         }
-        Err(_) => HttpResponse::InternalServerError().body("Failed to delete category!"),
+
+        // delete associated categories first
+        diesel::delete(news_categories::table.filter(news_categories::news_id.eq(*news_id)))
+            .execute(conn)
+            .map_err(|e| {
+                AppError::DatabaseError(format!("Failed to delete news categories: {}", e))
+            })?;
+
+        // then delete the news
+        diesel::delete(news::table.filter(news::id.eq(*news_id)))
+            .execute(conn)
+            .map_err(|e| AppError::DatabaseError(format!("Failed to delete news: {}", e)))?;
+
+        Ok(())
+    })?;
+
+    Ok(HttpResponse::Ok().json(json!({
+        "message": "News deleted successfully"
+    })))
+}
+
+pub async fn delete_category(
+    req: HttpRequest,
+    pool: web::Data<DBPool>,
+    category_id: web::Path<i32>,
+) -> Result<HttpResponse, AppError> {
+    // extract user claims from JWT and ensure admin
+    let user_claims = req
+        .extensions()
+        .get::<Claims>()
+        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access".into()))?;
+
+    if !user_claims.is_admin {
+        return Err(AppError::ForbiddenError(
+            "Only admins can delete categories".into(),
+        ));
     }
+
+    let mut conn = pool
+        .get()
+        .map_err(|e| AppError::DatabaseError(format!("Database connection error: {}", e)))?;
+
+    // perform deletion within a transaction
+    let result = conn.transaction::<_, AppError, _>(|conn| {
+        // check if category exists
+        let exists = categories::table
+            .find(*category_id)
+            .count()
+            .get_result::<i64>(conn)
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        if exists == 0 {
+            return Err(AppError::NotFoundError("Category not found".into()));
+        }
+
+        // delete associated news_categories first
+        diesel::delete(
+            news_categories::table.filter(news_categories::category_id.eq(*category_id)),
+        )
+        .execute(conn)
+        .map_err(|e| {
+            AppError::DatabaseError(format!("Failed to delete category associations: {}", e))
+        })?;
+
+        // then delete the category
+        diesel::delete(categories::table.filter(categories::id.eq(*category_id)))
+            .execute(conn)
+            .map_err(|e| AppError::DatabaseError(format!("Failed to delete category: {}", e)))?;
+
+        Ok(())
+    })?;
+
+    Ok(HttpResponse::Ok().json(json!({
+        "message": "Category deleted successfully"
+    })))
 }
