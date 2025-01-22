@@ -1,5 +1,4 @@
 use actix_web::{web, HttpResponse};
-use diesel::associations::HasTable;
 use diesel::prelude::*;
 use diesel::QueryDsl;
 use serde::Serialize;
