@@ -1,8 +1,7 @@
-use crate::utils::jwt::Claims;
+use crate::utils::jwt::verify_token;
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::{Error, HttpMessage};
 use futures::future::{ready, LocalBoxFuture, Ready};
-use jsonwebtoken::{decode, DecodingKey, Validation};
 
 pub struct AuthMiddleWare;
 impl<S, B> Transform<S, ServiceRequest> for AuthMiddleWare
@@ -43,24 +42,19 @@ where
 
         match auth_header {
             Some(auth_str) => {
-                let auth_str = auth_str.to_str().unwrap();
-                if !auth_str.starts_with("Bearer") {
+                let auth_str = auth_str.to_str().unwrap_or("");
+                if !auth_str.starts_with("Bearer ") {
                     return Box::pin(ready(Err(actix_web::error::ErrorUnauthorized(
-                        "Invalid tokens",
+                        "Invalid token format",
                     ))));
                 }
 
-                let token = &auth_str[..7];
-                let jwt_secret = std::env::var("JWT_TOKEN").unwrap();
+                let token = auth_str.trim_start_matches("Bearer ");
 
-                match decode::<Claims>(
-                    token,
-                    &DecodingKey::from_secret(jwt_secret.as_bytes()),
-                    &Validation::default(),
-                ) {
-                    Ok(token_data) => {
-                        // add claims to request extensions
-                        req.extensions_mut().insert(token_data.claims);
+                match verify_token(token) {
+                    Ok(claims) => {
+                        // Store claims in request extensions
+                        req.extensions_mut().insert(claims);
                         let fut = self.service.call(req);
 
                         Box::pin(async move {
@@ -69,7 +63,7 @@ where
                         })
                     }
                     Err(_) => Box::pin(ready(Err(actix_web::error::ErrorUnauthorized(
-                        "Invalid token",
+                        "Invalid or expired token",
                     )))),
                 }
             }
