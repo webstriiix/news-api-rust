@@ -1,3 +1,4 @@
+use crate::models::category::UpdateCategoryRequest;
 use crate::models::news::News;
 use crate::schema::categories::{self, dsl::*};
 use crate::schema::news;
@@ -255,6 +256,74 @@ pub async fn update_news(
     }))
 }
 
+// update category
+pub async fn update_category (
+    req: HttpRequest,
+    path: web::Path<i32>,
+    update_data: web::Json<UpdateCategoryRequest>,
+    pool: web::Data<DBPool>,
+    ) -> Result<HttpResponse, AppError> {
+   
+    let category_id = path.to_inner();
+
+    // extract users claim JWT
+    let user_claims = req
+        .extensions()
+        .get::<Claims>()
+        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access!".into()))?;
+    
+    // validate input
+    if let Err(errors) = update_data.validate() {
+        return Ok(HttpResponse::BadRequest().json(errors));
+    }
+
+    // connect to database
+    let mut conn = pool.get().map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    // Start updating category
+    let result = conn.transaction::<_,AppError,_>(|conn| {
+        // fetch existing category
+        let existing_category = categories
+            .find(category_id)
+            .first::<Category>(conn)
+            .optional()
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?
+            .ok_or_else(|| AppError::NotFoundError("Category not found!".into()))?;
+        
+        // check if user is admin
+        if !user_claims.is_admin {
+            return Err(AppError::ForbiddenError("Only admin can update!".into()));
+        }
+
+        // build query dynamically based on provided fields
+        let changest = (
+            update_data
+                .name
+                .as_deref()
+                .map(|category_name| category_name.eq(category_name)),
+            update_data
+                .description
+                .as_deref()
+                .map(|desc| desc.eq(desc)),
+             updated_at.eq(chrono::Utc::now().naive_utc()),
+        );
+
+        // execute update
+        let update_category = diesel::update(categories.find(category_id))
+            .set(changest)
+            .get_result(&mut conn)
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        Ok(update_category)
+    })?;
+
+    Ok(HttpResponse::Ok().json(UpdateCategoryResponse {
+        message: "Category updated successfully".to_string(),
+        category: result,
+    }))
+}
+
+
 /*
         DELETE FUNCTION
 */
@@ -366,3 +435,4 @@ pub async fn delete_category(
         "message": "Category deleted successfully"
     })))
 }
+
