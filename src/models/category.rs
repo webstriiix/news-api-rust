@@ -17,3 +17,12 @@ pub struct CategorySummary {
     pub id: i32,
     pub name: String,
 }
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateCategoryRequest {
+    #[validate(length(min = 3, max = 100, message = "Category name must be between 3 and 100 characters!"))]
+    pub name: String,
+
+    #[validate(length(min = 3, max = 255, message = "Category description must be between 3 and 255 characters!"))]
+    pub description: String,
+}
