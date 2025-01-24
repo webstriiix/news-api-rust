@@ -4,6 +4,7 @@ use futures::future::{ready, LocalBoxFuture, Ready};
 
 use crate::utils::jwt::Claims;
 
+// Middleware to enforce admin access
 pub struct AdminMiddleware;
 
 impl<S, B> Transform<S, ServiceRequest> for AdminMiddleware
@@ -40,6 +41,7 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
+        // Check if the user has admin privileges from the request extensions
         let is_admin = req
             .extensions()
             .get::<Claims>()

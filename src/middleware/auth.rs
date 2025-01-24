@@ -3,6 +3,7 @@ use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Tr
 use actix_web::{Error, HttpMessage};
 use futures::future::{ready, LocalBoxFuture, Ready};
 
+// Middleware to authenticate requests using JWT
 pub struct AuthMiddleWare;
 impl<S, B> Transform<S, ServiceRequest> for AuthMiddleWare
 where
@@ -38,6 +39,7 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
+        // Extract Authorization header
         let auth_header = req.headers().get("Authorization");
 
         match auth_header {
@@ -51,6 +53,7 @@ where
 
                 let token = auth_str.trim_start_matches("Bearer ");
 
+                // Verify the JWT token
                 match verify_token(token) {
                     Ok(claims) => {
                         // Store claims in request extensions
