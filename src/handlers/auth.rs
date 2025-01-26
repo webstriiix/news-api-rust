@@ -8,6 +8,7 @@ use crate::db::DBPool;
 use crate::models::user::{NewUser, User};
 use crate::schema::users::dsl::*;
 use crate::utils::jwt::create_token;
+use bcrypt::BcryptError;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginCredentials {
@@ -26,27 +27,39 @@ pub async fn login(
     pool: web::Data<DBPool>,
 ) -> Result<HttpResponse, Error> {
     let conn = &mut pool.get().map_err(|e| {
-        actix_web::error::ErrorInternalServerError(format!("Database error: {}", e))
+        log::error!("Database connection error: {}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
     })?;
 
     // Find user by username
     let user_result = users
         .filter(username.eq(&credentials.username))
         .first::<User>(conn)
-        .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid credentials"))?;
+        .map_err(|e| {
+            log::error!("User not found: {}", e);
+            actix_web::error::ErrorUnauthorized("Invalid credentials")
+        })?;
 
     // Verify password
-    if verify(&credentials.password, &user_result.password)
-        .map_err(|_| actix_web::error::ErrorInternalServerError("Password verification failed"))?
-    {
+    let password_matches =
+        verify(&credentials.password, &user_result.password).map_err(|e: BcryptError| {
+            log::error!("Password verification failed: {}", e);
+            actix_web::error::ErrorInternalServerError("Password verification failed")
+        })?;
+
+    if password_matches {
         let token = create_token(user_result.id, &user_result.username, user_result.is_admin)
-            .map_err(|_| actix_web::error::ErrorInternalServerError("Token creation failed"))?;
+            .map_err(|e| {
+                log::error!("Token creation failed: {}", e);
+                actix_web::error::ErrorInternalServerError("Token creation failed")
+            })?;
 
         Ok(HttpResponse::Ok().json(LoginResponse {
             token,
             is_admin: user_result.is_admin,
         }))
     } else {
+        log::warn!("Invalid credentials for user: {}", credentials.username);
         Err(actix_web::error::ErrorUnauthorized("Invalid credentials"))
     }
 }
