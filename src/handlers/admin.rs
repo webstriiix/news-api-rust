@@ -1,4 +1,4 @@
-use crate::models::category::UpdateCategoryRequest;
+use crate::models::category::{CategoryChangeset, UpdateCategoryRequest, UpdateCategoryResponse};
 use crate::models::news::News;
 use crate::schema::categories::{self, dsl::*};
 use crate::schema::news;
@@ -8,6 +8,7 @@ use crate::utils::error_response::AppError;
 use crate::utils::jwt::Claims;
 use crate::{db::DBPool, models::category::Category, models::news::NewsCategory};
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
+use chrono::Utc;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -141,7 +142,7 @@ pub struct UpdateNewsRequest {
 }
 
 #[derive(AsChangeset)]
-#[table_name = "news"]
+#[diesel(table_name = news)]
 struct NewsChangeset<'a> {
     title: Option<&'a str>,
     content: Option<&'a str>,
@@ -196,7 +197,8 @@ pub async fn update_news(
     let user_claims = req
         .extensions()
         .get::<Claims>()
-        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access".into()))?;
+        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access".into()))?
+        .clone();
 
     // validate input if any fields are provided
     if let Err(errors) = update_data.validate() {
@@ -257,64 +259,60 @@ pub async fn update_news(
 }
 
 // update category
-pub async fn update_category (
+pub async fn update_category(
     req: HttpRequest,
     path: web::Path<i32>,
     update_data: web::Json<UpdateCategoryRequest>,
     pool: web::Data<DBPool>,
-    ) -> Result<HttpResponse, AppError> {
-   
-    let category_id = path.to_inner();
+) -> Result<HttpResponse, AppError> {
+    let category_id = path.into_inner();
 
-    // extract users claim JWT
+    // Extract user claims from JWT
     let user_claims = req
         .extensions()
         .get::<Claims>()
-        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access!".into()))?;
-    
-    // validate input
+        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access!".into()))?
+        .clone();
+
+    // Validate input
     if let Err(errors) = update_data.validate() {
         return Ok(HttpResponse::BadRequest().json(errors));
     }
 
-    // connect to database
-    let mut conn = pool.get().map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    // Connect to database
+    let mut conn = pool
+        .get()
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     // Start updating category
-    let result = conn.transaction::<_,AppError,_>(|conn| {
-        // fetch existing category
+    let result = conn.transaction::<_, AppError, _>(|conn| {
+        // Fetch existing category
         let existing_category = categories
             .find(category_id)
             .first::<Category>(conn)
             .optional()
             .map_err(|e| AppError::DatabaseError(e.to_string()))?
             .ok_or_else(|| AppError::NotFoundError("Category not found!".into()))?;
-        
-        // check if user is admin
+
+        // Check if user is admin
         if !user_claims.is_admin {
             return Err(AppError::ForbiddenError("Only admin can update!".into()));
         }
 
-        // build query dynamically based on provided fields
-        let changest = (
-            update_data
-                .name
-                .as_deref()
-                .map(|category_name| category_name.eq(category_name)),
-            update_data
-                .description
-                .as_deref()
-                .map(|desc| desc.eq(desc)),
-             updated_at.eq(chrono::Utc::now().naive_utc()),
-        );
+        // Build query dynamically based on provided fields
+        let changeset = CategoryChangeset {
+            name: Some(update_data.name.clone()), // Use the updated name
+            description: Some(update_data.description.clone()), // Use the updated description
+            updated_at: chrono::Utc::now().naive_utc(),
+        };
 
-        // execute update
-        let update_category = diesel::update(categories.find(category_id))
-            .set(changest)
-            .get_result(&mut conn)
+        // Execute update
+        diesel::update(categories::table.find(category_id))
+            .set(&changeset) // Use the changeset directly
+            .execute(conn)
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
-        Ok(update_category)
+        Ok(existing_category) // Return the updated category
     })?;
 
     Ok(HttpResponse::Ok().json(UpdateCategoryResponse {
@@ -322,7 +320,6 @@ pub async fn update_category (
         category: result,
     }))
 }
-
 
 /*
         DELETE FUNCTION
@@ -337,14 +334,15 @@ pub async fn delete_news(
     let user_claims = req
         .extensions()
         .get::<Claims>()
-        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access".into()))?;
+        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access".into()))?
+        .clone();
 
     let mut conn = pool
         .get()
         .map_err(|e| AppError::DatabaseError(format!("Database connection error: {}", e)))?;
 
     // perform deletion within a transaction
-    let result = conn.transaction::<_, AppError, _>(|conn| {
+    conn.transaction::<_, AppError, _>(|conn| {
         // first check if news exists and user has permission
         let news_item = news::table
             .find(*news_id)
@@ -389,7 +387,8 @@ pub async fn delete_category(
     let user_claims = req
         .extensions()
         .get::<Claims>()
-        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access".into()))?;
+        .ok_or_else(|| AppError::UnauthorizedError("Unauthorized access".into()))?
+        .clone();
 
     if !user_claims.is_admin {
         return Err(AppError::ForbiddenError(
@@ -402,7 +401,7 @@ pub async fn delete_category(
         .map_err(|e| AppError::DatabaseError(format!("Database connection error: {}", e)))?;
 
     // perform deletion within a transaction
-    let result = conn.transaction::<_, AppError, _>(|conn| {
+    conn.transaction::<_, AppError, _>(|conn| {
         // check if category exists
         let exists = categories::table
             .find(*category_id)
@@ -435,4 +434,3 @@ pub async fn delete_category(
         "message": "Category deleted successfully"
     })))
 }
-
