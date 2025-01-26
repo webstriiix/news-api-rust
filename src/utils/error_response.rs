@@ -1,9 +1,10 @@
-use actix_web::{error::ResponseError, http::StatusCode, Error, HttpResponse};
-use derive_more::{Display, Error};
+use actix_web::{error::ResponseError, http::StatusCode, HttpResponse};
+use derive_more::Display;
 use diesel::result::Error as DieselError;
+use serde_json::json;
 
 // enum for error object
-#[derive(Debug, Display, Error)]
+#[derive(Debug, Display)]
 pub enum AppError {
     #[display("Database error: {}", _0)]
     DatabaseError(String),
@@ -15,7 +16,17 @@ pub enum AppError {
     ForbiddenError(String),
 }
 
-// implement enum
+// Implement std::error::Error for AppError
+impl std::error::Error for AppError {}
+
+// Implement From<DieselError> for AppError
+impl From<DieselError> for AppError {
+    fn from(error: DieselError) -> Self {
+        AppError::DatabaseError(format!("Diesel error: {}", error))
+    }
+}
+
+// Implement ResponseError for AppError
 impl ResponseError for AppError {
     // create error message for error response json
     fn error_response(&self) -> HttpResponse {
