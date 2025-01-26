@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::models::category::CategorySummary;
 
 #[derive(Queryable, Serialize, Deserialize, Insertable, Debug)]
-#[table_name = "news"]
+#[diesel(table_name = news)]
 pub struct News {
     pub id: i32,
     pub title: String,
@@ -17,7 +17,7 @@ pub struct News {
 }
 
 #[derive(Insertable, Queryable, Serialize, Deserialize)]
-#[table_name = "news_categories"]
+#[diesel(table_name = news_categories)]
 pub struct NewsCategory {
     pub news_id: i32,
     pub category_id: i32,

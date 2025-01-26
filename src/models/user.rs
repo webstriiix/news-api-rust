@@ -13,7 +13,7 @@ pub struct User {
 }
 
 #[derive(Queryable, Insertable, Serialize, Deserialize)]
-#[table_name = "users"]
+#[diesel(table_name = users)]
 pub struct NewUser {
     pub username: String,
     pub password: String,
