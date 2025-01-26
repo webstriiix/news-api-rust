@@ -1,13 +1,14 @@
-use actix_web::{App, HttpServer, web};
+use actix_web::{web, App, HttpServer};
 use dotenvy::dotenv;
 
-mod utils;
 mod db;
 mod handlers;
-mod models;
-mod schema;
-mod routes;
 mod middleware;
+mod models;
+mod routes;
+mod schema;
+mod test;
+mod utils;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -23,4 +24,3 @@ async fn main() -> std::io::Result<()> {
     .run()
     .await
 }
-
