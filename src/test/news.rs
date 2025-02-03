@@ -1,163 +1,128 @@
-// #[cfg(test)]
-// mod tests {
-//     use crate::schema::users::dsl::*;
-//     use crate::{db::establish_connection, models::user::User, routes::configure_routes};
-//     use actix_web::{http::StatusCode, test, web, App};
-//     use diesel::prelude::*;
-//     use dotenvy::dotenv;
-//     use serde_json::json;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::category::Category;
+    use crate::models::news::{News, NewsCategory, NewsDetail, NewsSummary};
+    use crate::schema::{categories, news, news_categories};
+    use crate::test::test_utils::{cleanup_test_database, get_test_pool, init_test_app, DBPool};
+    use actix_web::test;
+    use chrono::Utc;
+    use diesel::prelude::*;
 
-//     #[actix_web::test]
-//     async fn test_login_and_create_news() {
-//         dotenv().ok();
-//         let pool = establish_connection();
-//         let conn = &mut pool.get().unwrap();
+    async fn setup_test_data(pool: &DBPool) -> (News, Category) {
+        let mut conn = pool.get().expect("Failed to get DB connection");
 
-//         // Ensure the test user is an admin
-//         diesel::update(users.filter(username.eq("admin_user")))
-//             .set(is_admin.eq(true))
-//             .execute(conn)
-//             .unwrap();
+        // Create a test category
+        let test_category = Category {
+            id: 0,
+            name: "Test Category".to_string(),
+            description: Some("Test Description".to_string()),
+            created_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+        };
 
-//         let app = test::init_service(
-//             App::new()
-//                 .app_data(web::Data::new(pool.clone()))
-//                 .configure(configure_routes),
-//         )
-//         .await;
+        let category = diesel::insert_into(categories::table)
+            .values(&test_category)
+            .get_result::<Category>(&mut conn)
+            .expect("Failed to create test category");
 
-//         // Step 1: Login to get a JWT token
-//         let login_req = test::TestRequest::post()
-//             .uri("/auth/login")
-//             .set_json(json!({
-//                 "username": "admin_user",
-//                 "password": "admin_password"
-//             }))
-//             .to_request();
+        // Create a test news article
+        let test_news = News {
+            id: 0,
+            title: "Test News".to_string(),
+            content: "Test Content".to_string(),
+            author_id: 1,
+            created_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
+        };
 
-//         let login_resp = test::call_service(&app, login_req).await;
-//         assert_eq!(login_resp.status(), StatusCode::OK);
+        let news_item = diesel::insert_into(news::table)
+            .values(&test_news)
+            .get_result::<News>(&mut conn)
+            .expect("Failed to create test news");
 
-//         let login_body: serde_json::Value = test::read_body_json(login_resp).await;
-//         let token = login_body["token"].as_str().unwrap();
+        // Create news-category association
+        let news_category = NewsCategory {
+            news_id: news_item.id,
+            category_id: category.id,
+        };
 
-//         // Step 2: Use the token to create a news item
-//         let create_news_req = test::TestRequest::post()
-//             .uri("/admin/create-news")
-//             .set_json(json!({
-//                 "title": "Test News",
-//                 "content": "This is a test news article.",
-//                 "author_id": 1,
-//                 "category_ids": [1, 2]
-//             }))
-//             .insert_header(("Authorization", format!("Bearer {}", token))) // Add the JWT token
-//             .to_request();
+        diesel::insert_into(news_categories::table)
+            .values(&news_category)
+            .execute(&mut conn)
+            .expect("Failed to create news-category association");
 
-//         let create_news_resp = test::call_service(&app, create_news_req).await;
-//         assert_eq!(create_news_resp.status(), StatusCode::CREATED);
+        (news_item, category)
+    }
 
-//         let create_news_body: serde_json::Value = test::read_body_json(create_news_resp).await;
-//         assert_eq!(create_news_body["message"], "News created successfully");
-//         assert_eq!(create_news_body["news"]["title"], "Test News");
-//     }
+    #[actix_rt::test]
+    async fn test_list_news() {
+        // Setup
+        let (pool, database_url) = get_test_pool();
+        let app = init_test_app(pool.clone()).await;
 
-//     #[actix_web::test]
-//     async fn test_login_and_update_news() {
-//         dotenv().ok();
-//         let pool = establish_connection();
-//         let conn = &mut pool.get().unwrap();
+        // Create test data
+        let (news_item, _) = setup_test_data(&pool).await;
 
-//         // Ensure the test user is an admin
-//         diesel::update(users.filter(username.eq("admin_user")))
-//             .set(is_admin.eq(true))
-//             .execute(conn)
-//             .unwrap();
+        // Make request
+        let req = test::TestRequest::get().uri("/news").to_request();
+        let resp = test::call_service(&app, req).await;
 
-//         let app = test::init_service(
-//             App::new()
-//                 .app_data(web::Data::new(pool.clone()))
-//                 .configure(configure_routes),
-//         )
-//         .await;
+        // Assert response
+        assert_eq!(resp.status(), 200);
 
-//         // Step 1: Login to get a JWT token
-//         let login_req = test::TestRequest::post()
-//             .uri("/auth/login")
-//             .set_json(json!({
-//                 "username": "admin_user", // Replace with a valid username
-//                 "password": "admin_password" // Replace with a valid password
-//             }))
-//             .to_request();
+        let body: Vec<NewsSummary> = test::read_body_json(resp).await;
+        assert!(!body.is_empty());
+        assert_eq!(body[0].title, news_item.title);
 
-//         let login_resp = test::call_service(&app, login_req).await;
-//         assert_eq!(login_resp.status(), StatusCode::OK);
+        // Cleanup
+        cleanup_test_database(&database_url);
+    }
 
-//         let login_body: serde_json::Value = test::read_body_json(login_resp).await;
-//         let token = login_body["token"].as_str().unwrap();
+    #[actix_rt::test]
+    async fn test_get_news_detail() {
+        // Setup
+        let (pool, database_url) = get_test_pool();
+        let app = init_test_app(pool.clone()).await;
 
-//         // Step 2: Use the token to update a news item
-//         let update_news_req = test::TestRequest::put()
-//             .uri("/admin/news-update/1") // Replace with a valid news ID
-//             .set_json(json!({
-//                 "news_title": "Updated Title",
-//                 "news_content": "Updated content.",
-//                 "category_ids": [1, 2]
-//             }))
-//             .insert_header(("Authorization", format!("Bearer {}", token))) // Add the JWT token
-//             .to_request();
+        // Create test data
+        let (news_item, category) = setup_test_data(&pool).await;
 
-//         let update_news_resp = test::call_service(&app, update_news_req).await;
-//         assert_eq!(update_news_resp.status(), StatusCode::OK);
+        // Make request
+        let req = test::TestRequest::get()
+            .uri(&format!("/news/{}", news_item.id))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
 
-//         let update_news_body: serde_json::Value = test::read_body_json(update_news_resp).await;
-//         assert_eq!(update_news_body["message"], "News updated successfully");
-//         assert_eq!(update_news_body["news"]["title"], "Updated Title");
-//     }
+        // Assert response
+        assert_eq!(resp.status(), 200);
 
-//     #[actix_web::test]
-//     async fn test_login_and_delete_news() {
-//         dotenv().ok();
-//         let pool = establish_connection();
-//         let conn = &mut pool.get().unwrap();
+        let body: NewsDetail = test::read_body_json(resp).await;
+        assert_eq!(body.id, news_item.id);
+        assert_eq!(body.title, news_item.title);
+        assert_eq!(body.content, news_item.content);
+        assert_eq!(body.categories.len(), 1);
+        assert_eq!(body.categories[0].id, category.id);
+        assert_eq!(body.categories[0].name, category.name);
 
-//         // Ensure the test user is an admin
-//         diesel::update(users.filter(username.eq("admin_user")))
-//             .set(is_admin.eq(true))
-//             .execute(conn)
-//             .unwrap();
+        // Cleanup
+        cleanup_test_database(&database_url);
+    }
 
-//         let app = test::init_service(
-//             App::new()
-//                 .app_data(web::Data::new(pool.clone()))
-//                 .configure(configure_routes),
-//         )
-//         .await;
+    #[actix_rt::test]
+    async fn test_get_news_detail_not_found() {
+        // Setup
+        let (pool, database_url) = get_test_pool();
+        let app = init_test_app(pool.clone()).await;
 
-//         // Step 1: Login to get a JWT token
-//         let login_req = test::TestRequest::post()
-//             .uri("/auth/login")
-//             .set_json(json!({
-//                 "username": "admin_user", // Replace with a valid username
-//                 "password": "admin_password" // Replace with a valid password
-//             }))
-//             .to_request();
+        // Make request with non-existent ID
+        let req = test::TestRequest::get().uri("/news/999").to_request();
+        let resp = test::call_service(&app, req).await;
 
-//         let login_resp = test::call_service(&app, login_req).await;
-//         assert_eq!(login_resp.status(), StatusCode::OK);
+        // Assert response
+        assert_eq!(resp.status(), 404);
 
-//         let login_body: serde_json::Value = test::read_body_json(login_resp).await;
-//         let token = login_body["token"].as_str().unwrap();
-
-//         // Step 2: Use the token to delete a news item
-//         let delete_news_req = test::TestRequest::delete()
-//             .uri("/admin/delete-news/1") // Replace with a valid news ID
-//             .insert_header(("Authorization", format!("Bearer {}", token))) // Add the JWT token
-//             .to_request();
-
-//         let delete_news_resp = test::call_service(&app, delete_news_req).await;
-//         assert_eq!(delete_news_resp.status(), StatusCode::OK);
-
-//         let delete_news_body: serde_json::Value = test::read_body_json(delete_news_resp).await;
-//         assert_eq!(delete_news_body["message"], "News deleted successfully");
-//     }
-// }
+        // Cleanup
+        cleanup_test_database(&database_url);
+    }
+}
