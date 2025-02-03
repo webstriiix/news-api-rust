@@ -33,3 +33,10 @@ pub struct NewsDetail {
     pub updated_at: chrono::NaiveDateTime,
     pub categories: Vec<CategorySummary>,
 }
+
+// struct for json response list_news
+#[derive(Serialize, Deserialize)]
+pub struct NewsSummary {
+    pub title: String,
+    pub created_at: chrono::NaiveDateTime,
+}
