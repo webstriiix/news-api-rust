@@ -90,7 +90,7 @@ pub async fn register(
     let new_user = NewUser {
         username: user_data.username.clone(),
         password: password_hash,
-        is_admin: false,
+        is_admin: true,
     };
 
     // Insert into database
