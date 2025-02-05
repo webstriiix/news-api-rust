@@ -1,13 +1,11 @@
-use actix_web::{web, HttpResponse};
-use diesel::prelude::*;
-use diesel::QueryDsl;
-use serde::Serialize;
-
 use crate::db::DBPool;
 use crate::models::category::CategorySummary;
 use crate::models::news::{News, NewsDetail, NewsSummary};
 use crate::schema::news::dsl::*;
 use crate::schema::{categories, news_categories};
+use actix_web::{web, HttpResponse};
+use diesel::prelude::*;
+use diesel::QueryDsl;
 
 pub async fn list_news(pool: web::Data<DBPool>) -> HttpResponse {
     let mut conn = match pool.get() {
