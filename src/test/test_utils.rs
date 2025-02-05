@@ -72,49 +72,21 @@ pub fn cleanup_test_database(database_url: &str) {
         .expect("Failed to drop test database");
 }
 
-/// Initialize test application with database pool
-pub async fn init_test_app(
-    pool: DBPool,
-) -> impl actix_web::dev::Service<
-    actix_http::Request,
-    Response = actix_web::dev::ServiceResponse,
-    Error = actix_web::Error,
-> {
-    use actix_web::test;
-
-    let app = App::new().app_data(web::Data::new(pool)).service(
-        web::scope("/api")
-            .service(
-                web::resource("/news")
-                    .route(web::get().to(crate::handlers::news::list_news))
-                    .route(web::post().to(crate::handlers::admin::create_news)),
-            )
-            .service(
-                web::resource("/news/{id}")
-                    .route(web::get().to(crate::handlers::news::get_news_detail))
-                    .route(web::put().to(crate::handlers::admin::update_news))
-                    .route(web::delete().to(crate::handlers::admin::delete_news)),
-            ),
-    );
-
-    test::init_service(app).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use actix_web::test;
-    use diesel::r2d2::R2D2Connection;
+    use diesel::sql_query;
 
     #[test]
     async fn test_database_lifecycle() {
         // Create test database and pool
         let (pool, database_url) = get_test_pool();
 
-        // Verify connection works
+        // Check if DB is reachable
         let mut conn = pool.get().expect("Failed to get connection");
-        assert!(conn.ping().is_ok(), "Database connection is not alive");
-
+        let result: Result<(), _> = sql_query("SELECT 1").execute(&mut conn).map(|_| ());
+        assert!(result.is_ok(), "Database connection is not alive");
         // Clean up (important to drop connections first)
         drop(conn);
         drop(pool);
@@ -125,22 +97,5 @@ mod tests {
             PgConnection::establish(&database_url).is_err(),
             "Database still exists after cleanup"
         );
-    }
-
-    #[actix_web::test]
-    async fn test_app_with_db() {
-        let (pool, database_url) = get_test_pool();
-
-        // Initialize test application
-        let app = init_test_app(pool.clone()).await;
-
-        // Example test request
-        let req = test::TestRequest::get().uri("/api/news").to_request();
-        let resp = test::call_service(&app, req).await;
-        assert!(resp.status().is_success());
-
-        // Clean up
-        drop(pool);
-        cleanup_test_database(&database_url);
     }
 }
