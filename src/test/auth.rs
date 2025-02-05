@@ -14,7 +14,7 @@ mod auth_tests {
         let conn = &mut pool.get().unwrap();
 
         // Clean up the test user if it exists
-        diesel::delete(users.filter(username.eq("test_user")))
+        diesel::delete(users.filter(username.eq("admin_user")))
             .execute(conn)
             .unwrap();
 
@@ -29,8 +29,8 @@ mod auth_tests {
         let register_req = test::TestRequest::post()
             .uri("/auth/register")
             .set_json(json!({
-                "username": "test_user",
-                "password": "test_password"
+                "username": "admin_user",
+                "password": "admin_password",
             }))
             .to_request();
 
@@ -57,8 +57,8 @@ mod auth_tests {
         let login_req = test::TestRequest::post()
             .uri("/auth/login")
             .set_json(json!({
-                "username": "test_user",
-                "password": "test_password"
+                "username": "admin_user",
+                "password": "admin_password"
             }))
             .to_request();
 
@@ -86,7 +86,7 @@ mod auth_tests {
         let login_req = test::TestRequest::post()
             .uri("/auth/login")
             .set_json(json!({
-                "username": "test_user",
+                "username": "admin_user",
                 "password": "wrong_password"
             }))
             .to_request();
