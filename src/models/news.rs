@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::category::CategorySummary;
 
-#[derive(Queryable, Serialize, Deserialize, Insertable, Debug)]
+#[derive(Queryable, Serialize, Deserialize, Insertable, Debug, Clone)]
 #[diesel(table_name = news)]
 pub struct News {
     pub id: i32,
